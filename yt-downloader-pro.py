@@ -47,7 +47,6 @@ THEMES = {
     }
 }
 
-# --- Funzioni di Memoria Configurazione ---
 def carica_percorso():
     if os.path.exists(FILE_CONFIG):
         try:
@@ -62,7 +61,6 @@ def salva_percorso(percorso):
             json.dump({"cartella_destinazione": percorso}, f)
     except Exception: pass
 
-# --- Trucco Barra del Titolo Windows ---
 def imposta_barra_titolo_scura(window, scura=True):
     if sys.platform != "win32": return
     try:
@@ -73,7 +71,6 @@ def imposta_barra_titolo_scura(window, scura=True):
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 19, ctypes.byref(valore), ctypes.sizeof(valore))
     except Exception: pass
 
-# --- Sistema dei Temi ---
 def applica_tema(*args):
     is_dark = tema_scuro_var.get()
     modo = "dark" if is_dark else "light"
@@ -81,51 +78,102 @@ def applica_tema(*args):
 
     imposta_barra_titolo_scura(root, is_dark)
 
-    # Sfondi principali
     root.config(bg=t["bg"])
     main_container.config(bg=t["bg"])
     
-    # Ricolora i menu a tendina nativi
     root.option_add('*TCombobox*Listbox.background', t["entry_bg"])
     root.option_add('*TCombobox*Listbox.foreground', t["entry_fg"])
 
-    # Applica gli stili a tutti i componenti TTK
     style.configure(".", background=t["panel_bg"], foreground=t["fg"])
     style.configure("TFrame", background=t["panel_bg"])
-    
-    # Stile per i LabelFrame (I riquadri)
     style.configure("TLabelframe", background=t["panel_bg"], bordercolor=t["border"])
     style.configure("TLabelframe.Label", background=t["panel_bg"], foreground=t["accent"], font=FONT_TITOLO)
-
-    # Stile per i Bottoni standard TTK
     style.configure("TButton", background=t["btn_bg"], foreground=t["fg"], bordercolor=t["border"], lightcolor=t["btn_bg"], darkcolor=t["btn_bg"])
     style.map("TButton", background=[("active", t["btn_active"]), ("disabled", t["panel_bg"])], foreground=[("disabled", "gray")])
-    
-    # Caselle e Radio/Check
     style.configure("TEntry", fieldbackground=t["entry_bg"], foreground=t["entry_fg"])
     style.configure("TCombobox", fieldbackground=t["entry_bg"], foreground=t["entry_fg"], background=t["btn_bg"])
     style.configure("TCheckbutton", background=t["panel_bg"], foreground=t["fg"])
     style.configure("TRadiobutton", background=t["panel_bg"], foreground=t["fg"])
-
-    # LA CORREZIONE È QUI: Creiamo uno stile apposta per lo switch del tema che sta sul frame base (non nel pannello)
     style.configure("Tema.TCheckbutton", background=t["bg"], foreground=t["fg"])
     check_tema.config(style="Tema.TCheckbutton")
 
-    # Elementi classici TK
     lbl_cartella.config(bg=t["folder_bg"], fg=t["fg"])
     lista_scaricati.config(bg=t["log_bg"], fg=t["log_fg"], selectbackground="#444")
     menu_contestuale.config(bg=t["entry_bg"], fg=t["entry_fg"])
     status_label.config(bg=t["bg"], fg=t["fg"])
     frame_azioni_bottom.config(bg=t["bg"])
 
-    # Il tastone verde
     btn_scarica.config(bg="#4CAF50" if modo=="light" else "#2e7d32", fg="white")
 
-# --- Funzioni GUI ---
+# --- NUOVE FUNZIONI DI ANALISI ---
+def avvia_analisi():
+    url = url_entry.get().strip()
+    if not url: return
+
+    # Disabilita UI durante l'analisi
+    btn_analizza.config(state=tk.DISABLED)
+    btn_scarica.config(state=tk.DISABLED)
+    combo_video.config(state=tk.NORMAL)
+    combo_video.set("Ricerca qualità...")
+    combo_video.config(state=tk.DISABLED)
+    
+    aggiorna_stato("Analisi del link in corso...", THEMES["dark" if tema_scuro_var.get() else "light"]["accent"])
+
+    threading.Thread(target=esegui_analisi, args=(url,)).start()
+
+def esegui_analisi(url):
+    try:
+        opzioni = {
+            'quiet': True,
+            'no_warnings': True,
+            'playlist_items': '1', # Se è una playlist, analizza solo il primo video per essere veloce
+        }
+        with yt_dlp.YoutubeDL(opzioni) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        # Se il link è una playlist, estrai le info dal primo video disponibile
+        video_info = info['entries'][0] if 'entries' in info and info['entries'] else info
+
+        # Estrae le risoluzioni uniche disponibili per il video
+        altezze = set()
+        for f in video_info.get('formats', []):
+            if f.get('vcodec') != 'none' and f.get('height'):
+                altezze.add(int(f.get('height')))
+
+        altezze_ordinate = sorted(list(altezze), reverse=True)
+        nuovi_valori = []
+        for h in altezze_ordinate:
+            if h >= 2160: nuovi_valori.append(f"{h}p (4K)")
+            elif h >= 1440: nuovi_valori.append(f"{h}p (2K)")
+            elif h >= 1080: nuovi_valori.append(f"{h}p (Full HD)")
+            elif h >= 720: nuovi_valori.append(f"{h}p (HD)")
+            else: nuovi_valori.append(f"{h}p (SD)")
+
+        if not nuovi_valori: # CORRETTO QUI: not invece di non
+            nuovi_valori = ["Migliore disponibile"]
+
+        root.after(0, lambda: completa_analisi(nuovi_valori, "Analisi completata. Scegli la qualità."))
+
+    except Exception as e:
+        valori_fallback = ("1080p (Fallback)", "720p", "480p")
+        root.after(0, lambda: completa_analisi(valori_fallback, "Analisi fallita. Usa impostazioni standard.", "orange"))
+
+def completa_analisi(valori, messaggio, colore=None):
+    combo_video.config(values=valori)
+    combo_video.current(0) # Seleziona automaticamente la più alta trovata!
+    aggiorna_dropdowns() # Ripristina lo stato corretto (readonly/disabled)
+    
+    btn_analizza.config(state=tk.NORMAL)
+    btn_scarica.config(state=tk.NORMAL)
+    aggiorna_stato(messaggio, colore)
+
+
 def incolla_url():
     try:
+        testo = root.clipboard_get()
         url_entry.delete(0, tk.END)
-        url_entry.insert(0, root.clipboard_get())
+        url_entry.insert(0, testo)
+        avvia_analisi() # Avvia automaticamente l'analisi quando si incolla!
     except tk.TclError: pass
 
 def mostra_menu_tasto_destro(event):
@@ -202,8 +250,8 @@ def scarica_media():
     usa_compatibilita = compatibilita_var.get()
     
     btn_scarica.config(state=tk.DISABLED)
+    btn_analizza.config(state=tk.DISABLED)
     btn_incolla.config(state=tk.DISABLED)
-    btn_cartella.config(state=tk.DISABLED)
     btn_annulla.config(state=tk.NORMAL)
     url_entry.config(state=tk.DISABLED)
     
@@ -232,12 +280,19 @@ def esegui_download(url, formato, qualita_v, qualita_a, destinazione, is_playlis
             })
         else:
             altezza_max = qualita_v.split("p")[0]
+            
+            if altezza_max.isdigit():
+                vincolo_altezza = f"[height<={altezza_max}]"
+            else:
+                vincolo_altezza = "" 
+
             if usa_compatibilita:
-                formato_str = f'bestvideo[height<={altezza_max}][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={altezza_max}][ext=mp4]+bestaudio[ext=m4a]/best'
+                formato_str = f'bestvideo{vincolo_altezza}[vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/bestvideo{vincolo_altezza}[ext=mp4]+bestaudio[ext=m4a]/best'
                 formato_merge = 'mp4'
             else:
-                formato_str = f'bestvideo[height<={altezza_max}]+bestaudio/best'
+                formato_str = f'bestvideo{vincolo_altezza}+bestaudio/best'
                 formato_merge = 'mkv'
+            
             opzioni_ydl.update({'format': formato_str, 'merge_output_format': formato_merge})
 
         with yt_dlp.YoutubeDL(opzioni_ydl) as ydl:
@@ -245,7 +300,7 @@ def esegui_download(url, formato, qualita_v, qualita_a, destinazione, is_playlis
 
         if not stop_download:
             root.after(0, aggiorna_stato, "Operazione completata con successo.", "#4CAF50")
-            root.after(0, lambda: [url_entry.config(state=tk.NORMAL), url_entry.delete(0, tk.END)])
+            root.after(0, lambda: [url_entry.config(state=tk.NORMAL), url_entry.delete(0, tk.END), combo_video.set("In attesa di un link...")])
         
     except Exception as e:
         if stop_download:
@@ -257,20 +312,20 @@ def esegui_download(url, formato, qualita_v, qualita_a, destinazione, is_playlis
     finally:
         root.after(0, lambda: url_entry.config(state=tk.NORMAL))
         root.after(0, lambda: btn_scarica.config(state=tk.NORMAL))
+        root.after(0, lambda: btn_analizza.config(state=tk.NORMAL))
         root.after(0, lambda: btn_incolla.config(state=tk.NORMAL))
-        root.after(0, lambda: btn_cartella.config(state=tk.NORMAL))
         root.after(0, lambda: btn_annulla.config(state=tk.DISABLED))
 
 
 # --- INIZIALIZZAZIONE FINESTRA ---
 root = tk.Tk()
-root.title("YT Downloader Pro - Dashboard Dark/Light")
+root.title("YT Downloader Pro - Auto Analyze")
 root.geometry("850x800") 
 root.minsize(750, 700)   
 
 style = ttk.Style()
 style.theme_use('clam') 
-tema_scuro_var = tk.BooleanVar(value=True) # Partiamo in scuro!
+tema_scuro_var = tk.BooleanVar(value=True) 
 percorso_var = tk.StringVar(value=carica_percorso())
 
 main_container = tk.Frame(root)
@@ -287,6 +342,8 @@ frame_url_inner.pack(fill="x")
 
 url_entry = ttk.Entry(frame_url_inner, font=FONT_NORMALE) 
 url_entry.pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 10)) 
+btn_analizza = ttk.Button(frame_url_inner, text="🔍 Analizza Link", command=avvia_analisi)
+btn_analizza.pack(side=tk.LEFT, padx=(0, 5))
 btn_incolla = ttk.Button(frame_url_inner, text="Incolla", command=incolla_url)
 btn_incolla.pack(side=tk.RIGHT)
 
@@ -311,9 +368,8 @@ grid_imp.columnconfigure(1, weight=1)
 # VIDEO
 ttk.Radiobutton(grid_imp, text="Video (MP4 / MKV)", variable=formato_var, value="mp4").grid(row=0, column=0, sticky="w", pady=(5, 0))
 qualita_video_var = tk.StringVar()
-combo_video = ttk.Combobox(grid_imp, textvariable=qualita_video_var, state="readonly", font=FONT_NORMALE)
-combo_video['values'] = ("2160p (4K)", "1440p (2K)", "1080p (Full HD)", "720p (HD)", "480p (SD)")
-combo_video.current(2) 
+combo_video = ttk.Combobox(grid_imp, textvariable=qualita_video_var, state="disabled", font=FONT_NORMALE)
+combo_video.set("In attesa di un link...") 
 combo_video.grid(row=0, column=1, sticky="ew", padx=10, pady=(5, 0))
 
 # COMPATIBILITA'
@@ -353,12 +409,11 @@ lbl_cartella.pack(side=tk.LEFT, fill="x", expand=True, ipady=4)
 
 
 # ==========================================
-# SEZIONE 4 E 5: AZIONI E LOG (Affiancati in basso)
+# SEZIONE 4 E 5: AZIONI E LOG
 # ==========================================
 frame_bottom = tk.Frame(main_container)
 frame_bottom.pack(fill="both", expand=True)
 
-# AZIONI
 frame_azioni_bottom = tk.Frame(frame_bottom)
 frame_azioni_bottom.pack(fill="x", pady=(0, 10))
 
@@ -371,7 +426,6 @@ btn_annulla.pack(side=tk.LEFT)
 status_label = tk.Label(frame_azioni_bottom, text="Pronto.", font=("Segoe UI", 11, "bold"))
 status_label.pack(side=tk.LEFT, padx=15)
 
-# Il nostro switch colpevole dell'errore di prima!
 check_tema = ttk.Checkbutton(frame_azioni_bottom, text="🌙 Tema Scuro", variable=tema_scuro_var, command=applica_tema)
 check_tema.pack(side=tk.RIGHT)
 
